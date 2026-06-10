@@ -1,6 +1,6 @@
 # RunPod whisper.cpp worker
 
-RunPod serverless worker that mirrors a local `whisper.cpp` transcription path:
+RunPod serverless worker that mirrors a local [whisper.cpp](https://github.com/ggml-org/whisper.cpp) transcription path:
 
 ```text
 server-side ffmpeg -> 16 kHz mono PCM WAV
