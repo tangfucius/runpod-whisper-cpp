@@ -71,7 +71,7 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
     timeout = int(os.environ.get("WHISPER_CPP_TIMEOUT_SECONDS", "3600"))
     threads = str(job_input.get("threads") or os.environ.get("WHISPER_CPP_THREADS", "4"))
 
-    # Keep these defaults aligned with Arteri's local whisper.cpp invocation:
+    # Keep these defaults aligned with the expected local whisper.cpp invocation:
     #   -nt    no timestamps
     #   -mc 0  no previous text context
     #   -sns   suppress non-speech tokens
@@ -88,11 +88,11 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as exc:
         return {"error": str(exc)}
 
-    work_dir = Path(tempfile.mkdtemp(prefix="arteri-whisper-cpp-"))
+    work_dir = Path(tempfile.mkdtemp(prefix="whisper-cpp-"))
     try:
-        # Arteri pre-converts audio server-side to 16 kHz mono PCM WAV before
-        # staging it in R2. The worker only downloads and transcribes, avoiding
-        # runtime ffmpeg overhead inside RunPod.
+        # Audio should be pre-converted to 16 kHz mono PCM WAV before staging it.
+        # The worker only downloads and transcribes, avoiding runtime ffmpeg
+        # overhead inside RunPod.
         wav_path = work_dir / "audio.wav"
         out_base = work_dir / "transcript"
         out_txt = work_dir / "transcript.txt"
