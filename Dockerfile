@@ -32,14 +32,20 @@ RUN pip install --no-cache-dir \
     runpod==1.7.9 \
     requests==2.32.5
 
-# Build whisper.cpp with CUDA, but do NOT download model yet
+# Build whisper.cpp with CUDA.
+# Important changes:
+#   - BUILD_SHARED_LIBS=OFF avoids shared lib CUDA driver symbol link issues
+#   - --target whisper-cli avoids building whisper-bench and other unused examples
 WORKDIR /opt
 
 RUN git clone https://github.com/ggml-org/whisper.cpp.git whisper.cpp \
   && cd whisper.cpp \
   && git checkout ${WHISPER_CPP_COMMIT} \
-  && cmake -B build -DGGML_CUDA=1 -DCMAKE_BUILD_TYPE=Release \
-  && cmake --build build --config Release -j"$(nproc)" \
+  && cmake -B build \
+      -DGGML_CUDA=ON \
+      -DBUILD_SHARED_LIBS=OFF \
+      -DCMAKE_BUILD_TYPE=Release \
+  && cmake --build build --config Release --target whisper-cli -j"$(nproc)" \
   && test -x /opt/whisper.cpp/build/bin/whisper-cli
 
 WORKDIR /app
