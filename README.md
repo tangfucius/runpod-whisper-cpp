@@ -14,7 +14,7 @@ The worker expects either:
 
 Pre-converting and staging audio keeps ffmpeg work out of the RunPod worker.
 
-## Prepare audio and upload to an Cloudflare R2 staging bucket
+## Prepare audio and upload to a Cloudflare R2 staging bucket
 
 Set common environment variables:
 
@@ -133,4 +133,24 @@ await s3.send(new PutObjectCommand({
 }));
 
 console.log(key);
+```
+
+## Run the RunPod endpoint with the staged R2 URL
+
+Create a presigned URL for the staged object, then pass it as `input.audio` to the RunPod endpoint:
+
+```bash
+export RUNPOD_API_KEY="<runpod-api-key>"
+export RUNPOD_ENDPOINT_ID="<runpod-endpoint-id>"
+
+R2_URL=$(AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID" \
+AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY" \
+aws s3 presign "s3://${R2_BUCKET}/${KEY}" \
+  --endpoint-url "$R2_ENDPOINT" \
+  --expires-in 3600)
+
+curl -X POST "https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/runsync" \
+  -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "$(jq -n --arg audio "$R2_URL" '{input: {audio: $audio, model: "large-v3", language: "en"}}')"
 ```
