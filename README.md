@@ -57,3 +57,19 @@ The Docker image clones `ggml-org/whisper.cpp` at a pinned commit and downloads
 `ggml-large-v3.bin` during image build. This makes cold starts larger but keeps runtime
 behavior predictable. Runtime audio conversion is intentionally not included; Arteri does
 conversion before uploading to R2 so RunPod time is spent on transcription only.
+
+
+## Local RunPod SDK test
+
+From this repo, create a local `test_input.json` containing a 16 kHz mono PCM WAV as `audio_base64`, then run:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+WHISPER_CPP_BIN=/path/to/whisper-cli \
+WHISPER_CPP_MODEL_DIR=/path/to/whisper.cpp/models \
+python handler.py --rp_log_level DEBUG
+```
+
+The module `rp_handler.py` is included so RunPod/GitHub scanners can find an explicit queue-worker entrypoint while `handler.py` remains importable for local tests.
