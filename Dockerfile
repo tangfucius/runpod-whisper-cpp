@@ -25,8 +25,9 @@ RUN git clone https://github.com/ggml-org/whisper.cpp.git whisper.cpp \
 
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
-RUN pip3 install --no-cache-dir -r /app/requirements.txt
+RUN python3 -m pip install --break-system-packages --no-cache-dir -r /app/requirements.txt
 COPY handler.py /app/handler.py
+COPY rp_handler.py /app/rp_handler.py
 
 ENV WHISPER_CPP_BIN=/opt/whisper.cpp/build/bin/whisper-cli
 ENV WHISPER_CPP_MODEL_DIR=/opt/whisper.cpp/models
@@ -34,4 +35,4 @@ ENV WHISPER_CPP_MODEL=large-v3
 ENV WHISPER_CPP_THREADS=4
 ENV WHISPER_CPP_TIMEOUT_SECONDS=3600
 
-CMD ["python3", "/app/handler.py"]
+CMD ["python3", "/app/rp_handler.py"]
