@@ -1,0 +1,33 @@
+{
+  "title": "Arteri whisper.cpp Worker",
+  "description": "RunPod serverless worker for Arteri that transcribes pre-converted 16 kHz mono WAV files with whisper.cpp using -nt -mc 0 -sns for local parity.",
+  "type": "serverless",
+  "category": "audio",
+  "config": {
+    "runsOn": "GPU",
+    "containerDiskInGb": 30,
+    "gpuCount": 1,
+    "gpuIds": "AMPERE_16,AMPERE_24,ADA_24",
+    "allowedCudaVersions": ["12.4"],
+    "env": [
+      {
+        "key": "WHISPER_CPP_THREADS",
+        "input": {
+          "name": "whisper.cpp threads",
+          "type": "string",
+          "description": "CPU threads used by whisper-cli",
+          "default": "4"
+        }
+      },
+      {
+        "key": "WHISPER_CPP_TIMEOUT_SECONDS",
+        "input": {
+          "name": "Transcription timeout seconds",
+          "type": "string",
+          "description": "Maximum seconds for one whisper.cpp transcription job",
+          "default": "3600"
+        }
+      }
+    ]
+  }
+}
