@@ -154,3 +154,26 @@ curl -X POST "https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/runsync" \
   -H "Content-Type: application/json" \
   -d "$(jq -n --arg audio "$R2_URL" '{input: {audio: $audio, model: "large-v3", language: "en"}}')"
 ```
+
+## Runtime instrumentation
+
+The worker emits newline-delimited JSON logs to stdout. RunPod captures these in
+endpoint logs, and the handler also sends compact JSON progress updates while a
+job is running.
+
+Useful events when debugging timeouts:
+
+- `job_received`: handler accepted the job and records input shape.
+- `stage_start` / `stage_end`: records elapsed time for `resolve_model`,
+  `download_audio` or `decode_base64_audio`, `transcribe`, and `read_transcript`.
+- `audio_downloaded`: records staged audio byte count and URL host without
+  logging the full presigned URL.
+- `whisper_command_ready`: records sanitized whisper.cpp args and resource state.
+- `whisper_heartbeat`: emitted every `WHISPER_CPP_HEARTBEAT_SECONDS` while
+  `whisper-cli` is still running.
+- `job_timeout`: emitted if the whisper.cpp subprocess exceeds
+  `WHISPER_CPP_TIMEOUT_SECONDS`.
+
+Each log includes process RSS, 1-minute load average, and GPU utilization/memory
+from `nvidia-smi` when available. Set `WHISPER_CPP_HEARTBEAT_SECONDS` to adjust
+heartbeat frequency; the default is 10 seconds.
