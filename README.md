@@ -157,9 +157,9 @@ curl -X POST "https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/runsync" \
 
 ## Runtime instrumentation
 
-The worker emits newline-delimited JSON logs to stdout. RunPod captures these in
-endpoint logs, and the handler also sends compact JSON progress updates while a
-job is running.
+The worker emits plain text `key=value` logs to stdout so RunPod's log table
+shows the full diagnostic line in the message column. The handler also sends
+compact structured progress updates while a job is running.
 
 Useful events when debugging timeouts:
 
@@ -169,11 +169,20 @@ Useful events when debugging timeouts:
 - `audio_downloaded`: records staged audio byte count and URL host without
   logging the full presigned URL.
 - `whisper_command_ready`: records sanitized whisper.cpp args and resource state.
-- `whisper_heartbeat`: emitted every `WHISPER_CPP_HEARTBEAT_SECONDS` while
-  `whisper-cli` is still running.
+- `transcribe_running`: emitted every `WHISPER_CPP_HEARTBEAT_SECONDS` while
+  the `transcribe` stage is still running. These lines include the child process PID,
+  Linux process state, child RSS, context-switch counters, GPU utilization, and
+  scalar `nvidia-smi` compute process details for the child process.
+- `whisper_stalled`: emitted when `whisper-cli` keeps running longer than
+  `WHISPER_CPP_STALL_TIMEOUT_SECONDS`; the handler kills the subprocess and
+  returns an error before RunPod's outer job timeout.
 - `job_timeout`: emitted if the whisper.cpp subprocess exceeds
   `WHISPER_CPP_TIMEOUT_SECONDS`.
 
 Each log includes process RSS, 1-minute load average, and GPU utilization/memory
 from `nvidia-smi` when available. Set `WHISPER_CPP_HEARTBEAT_SECONDS` to adjust
 heartbeat frequency; the default is 10 seconds.
+
+Set `WHISPER_CPP_STALL_TIMEOUT_SECONDS` to control how long a single
+`whisper-cli` invocation may run before being treated as stalled. The Docker
+default is 120 seconds. Set it to `0` to disable the stall watchdog.

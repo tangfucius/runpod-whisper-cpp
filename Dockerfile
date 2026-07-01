@@ -42,6 +42,7 @@ ENV WHISPER_CPP_MODEL_DIR=/models
 ENV WHISPER_CPP_MODEL=large-v3
 ENV WHISPER_CPP_THREADS=4
 ENV WHISPER_CPP_TIMEOUT_SECONDS=3600
+ENV WHISPER_CPP_STALL_TIMEOUT_SECONDS=120
 
 RUN test -x /app/build/bin/whisper-cli \
   && test -f /models/ggml-large-v3.bin
