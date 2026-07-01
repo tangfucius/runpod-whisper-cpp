@@ -22,6 +22,7 @@ HEARTBEAT_SECONDS = int(os.environ.get("WHISPER_CPP_HEARTBEAT_SECONDS", "10"))
 def _emit(event: str, **fields: Any) -> None:
     record = {
         "event": event,
+        "message": event,
         "ts": round(time.time(), 3),
         "worker_uptime_s": round(time.monotonic() - WORKER_STARTED_AT, 3),
         **fields,
@@ -31,7 +32,7 @@ def _emit(event: str, **fields: Any) -> None:
 
 def _progress(job: Dict[str, Any], **fields: Any) -> None:
     try:
-        runpod.serverless.progress_update(job, json.dumps(fields, default=str, sort_keys=True))
+        runpod.serverless.progress_update(job, fields)
     except Exception as exc:
         _emit("progress_update_failed", error=repr(exc), job_id=job.get("id"))
 
