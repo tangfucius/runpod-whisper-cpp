@@ -19,6 +19,12 @@ import runpod
 WORKER_STARTED_AT = time.monotonic()
 HEARTBEAT_SECONDS = int(os.environ.get("WHISPER_CPP_HEARTBEAT_SECONDS", "10"))
 STALL_TIMEOUT_SECONDS = int(os.environ.get("WHISPER_CPP_STALL_TIMEOUT_SECONDS", "120"))
+PROGRESS_UPDATES_ENABLED = os.environ.get("RUNPOD_PROGRESS_UPDATES", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 class WhisperStallTimeout(Exception):
@@ -53,6 +59,8 @@ def _log_value(value: Any) -> str:
 
 
 def _progress(job: Dict[str, Any], **fields: Any) -> None:
+    if not PROGRESS_UPDATES_ENABLED:
+        return
     try:
         runpod.serverless.progress_update(job, fields)
     except Exception as exc:
@@ -445,7 +453,7 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
             transcript_chars=len(text),
             **_resource_snapshot(),
         )
-        return {
+        response = {
             "transcription": _format_output(text, transcription_format),
             "segments": [],
             "detected_language": language,
@@ -463,6 +471,13 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
                 "total_s": total_elapsed_s,
             },
         }
+        _emit(
+            "job_result_ready",
+            job_id=job_id,
+            result_json_bytes=len(json.dumps(response, default=str).encode("utf-8")),
+            transcript_chars=len(text),
+        )
+        return response
     except subprocess.TimeoutExpired as exc:
         _emit(
             "job_timeout",

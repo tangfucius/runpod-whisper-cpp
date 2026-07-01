@@ -158,8 +158,10 @@ curl -X POST "https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/runsync" \
 ## Runtime instrumentation
 
 The worker emits plain text `key=value` logs to stdout so RunPod's log table
-shows the full diagnostic line in the message column. The handler also sends
-compact structured progress updates while a job is running.
+shows the full diagnostic line in the message column. RunPod progress updates
+are disabled by default because they can leave the status endpoint showing an
+intermediate `output` while the worker is trying to return final results. Set
+`RUNPOD_PROGRESS_UPDATES=true` to opt back in.
 
 Useful events when debugging timeouts:
 
@@ -178,6 +180,8 @@ Useful events when debugging timeouts:
   returns an error before RunPod's outer job timeout.
 - `job_timeout`: emitted if the whisper.cpp subprocess exceeds
   `WHISPER_CPP_TIMEOUT_SECONDS`.
+- `job_result_ready`: emitted immediately before returning the final handler
+  result, including the estimated JSON payload size.
 
 Each log includes process RSS, 1-minute load average, and GPU utilization/memory
 from `nvidia-smi` when available. Set `WHISPER_CPP_HEARTBEAT_SECONDS` to adjust
