@@ -3,6 +3,7 @@ import contextlib
 import json
 import os
 import resource
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -17,20 +18,49 @@ import runpod
 
 WORKER_STARTED_AT = time.monotonic()
 HEARTBEAT_SECONDS = int(os.environ.get("WHISPER_CPP_HEARTBEAT_SECONDS", "10"))
+STALL_TIMEOUT_SECONDS = int(os.environ.get("WHISPER_CPP_STALL_TIMEOUT_SECONDS", "120"))
+PROGRESS_UPDATES_ENABLED = os.environ.get("RUNPOD_PROGRESS_UPDATES", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+
+class WhisperStallTimeout(Exception):
+    def __init__(self, elapsed_s: float, stdout: str, stderr: str) -> None:
+        super().__init__(f"whisper.cpp appeared stalled after {elapsed_s:.3f}s")
+        self.elapsed_s = elapsed_s
+        self.stdout = stdout
+        self.stderr = stderr
 
 
 def _emit(event: str, **fields: Any) -> None:
     record = {
         "event": event,
-        "message": event,
         "ts": round(time.time(), 3),
         "worker_uptime_s": round(time.monotonic() - WORKER_STARTED_AT, 3),
         **fields,
     }
-    print(json.dumps(record, default=str, sort_keys=True), flush=True)
+    parts = [f"{key}={_log_value(record[key])}" for key in sorted(record)]
+    print(" ".join(parts), flush=True)
+
+
+def _log_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, dict)):
+        value = json.dumps(value, default=str, sort_keys=True)
+    return shlex.quote(str(value))
 
 
 def _progress(job: Dict[str, Any], **fields: Any) -> None:
+    if not PROGRESS_UPDATES_ENABLED:
+        return
     try:
         runpod.serverless.progress_update(job, fields)
     except Exception as exc:
@@ -78,6 +108,58 @@ def _resource_snapshot() -> Dict[str, Any]:
         "loadavg_1m": round(os.getloadavg()[0], 3),
         **_gpu_snapshot(),
     }
+
+
+def _child_process_snapshot(pid: int) -> Dict[str, Any]:
+    snapshot: Dict[str, Any] = {"child_pid": pid}
+    status_path = Path(f"/proc/{pid}/status")
+    try:
+        for line in status_path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("State:"):
+                snapshot["child_state"] = line.split(":", 1)[1].strip()
+            elif line.startswith("VmRSS:"):
+                parts = line.split()
+                if len(parts) >= 2:
+                    snapshot["child_rss_mb"] = round(int(parts[1]) / 1024)
+            elif line.startswith("voluntary_ctxt_switches:"):
+                snapshot["child_voluntary_ctxt_switches"] = int(line.rsplit(None, 1)[1])
+            elif line.startswith("nonvoluntary_ctxt_switches:"):
+                snapshot["child_nonvoluntary_ctxt_switches"] = int(line.rsplit(None, 1)[1])
+    except Exception as exc:
+        snapshot["child_process_error"] = repr(exc)
+
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-compute-apps=pid,process_name,used_memory",
+                "--format=csv,noheader,nounits",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode == 0:
+            matching_gpu_processes = 0
+            matching_gpu_memory_mb = 0
+            matching_gpu_process_name = None
+            for line in result.stdout.strip().splitlines():
+                parts = [part.strip() for part in line.split(",", 2)]
+                if len(parts) == 3 and parts[0] == str(pid):
+                    matching_gpu_processes += 1
+                    matching_gpu_process_name = parts[1]
+                    matching_gpu_memory_mb += int(parts[2])
+            snapshot["child_gpu_process_count"] = matching_gpu_processes
+            snapshot["child_gpu_process_name"] = matching_gpu_process_name
+            snapshot["child_gpu_used_memory_mb"] = matching_gpu_memory_mb
+        else:
+            snapshot["child_gpu_process_error"] = result.stderr[-500:].strip()
+    except Exception as exc:
+        snapshot["child_gpu_process_error"] = repr(exc)
+
+    return snapshot
 
 
 @contextlib.contextmanager
@@ -135,6 +217,15 @@ def _write_base64_audio(data: str, dest: Path) -> int:
     return len(audio_bytes)
 
 
+def _kill_process(process: subprocess.Popen[str]) -> None:
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
 def _run(command: list[str], timeout: int, job: Dict[str, Any]) -> subprocess.CompletedProcess:
     start = time.monotonic()
     with tempfile.TemporaryFile("w+") as stdout_file, tempfile.TemporaryFile("w+") as stderr_file:
@@ -144,6 +235,8 @@ def _run(command: list[str], timeout: int, job: Dict[str, Any]) -> subprocess.Co
             stderr=stderr_file,
             text=True,
         )
+        last_stdout_pos = 0
+        last_progress = start
         while process.poll() is None:
             elapsed = time.monotonic() - start
             if elapsed >= timeout:
@@ -164,12 +257,30 @@ def _run(command: list[str], timeout: int, job: Dict[str, Any]) -> subprocess.Co
             except subprocess.TimeoutExpired:
                 heartbeat_elapsed = round(time.monotonic() - start, 3)
                 _emit(
-                    "whisper_heartbeat",
+                    "transcribe_running",
                     job_id=job.get("id"),
+                    stage="transcribe",
                     elapsed_s=heartbeat_elapsed,
+                    **_child_process_snapshot(process.pid),
                     **_resource_snapshot(),
                 )
-                _progress(job, stage="transcribe", status="running", elapsed_s=heartbeat_elapsed)
+
+                stdout_file.seek(0, os.SEEK_END)
+                stdout_pos = stdout_file.tell()
+                if stdout_pos > last_stdout_pos:
+                    last_stdout_pos = stdout_pos
+                    last_progress = time.monotonic()
+
+                stalled_seconds = time.monotonic() - last_progress
+                if STALL_TIMEOUT_SECONDS > 0 and stalled_seconds >= STALL_TIMEOUT_SECONDS:
+                    _kill_process(process)
+                    stdout_file.seek(0)
+                    stderr_file.seek(0)
+                    raise WhisperStallTimeout(
+                        stalled_seconds,
+                        stdout_file.read(),
+                        stderr_file.read(),
+                    )
 
         stdout_file.seek(0)
         stderr_file.seek(0)
@@ -300,6 +411,7 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
             "whisper_command_ready",
             job_id=job_id,
             command=safe_command,
+            stall_timeout_s=STALL_TIMEOUT_SECONDS,
             timeout_s=timeout,
             **_resource_snapshot(),
         )
@@ -350,7 +462,7 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
             transcript_chars=len(text),
             **_resource_snapshot(),
         )
-        return {
+        response = {
             "transcription": _format_output(text, transcription_format),
             "segments": [],
             "detected_language": language,
@@ -368,6 +480,13 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
                 "total_s": total_elapsed_s,
             },
         }
+        _emit(
+            "job_result_ready",
+            job_id=job_id,
+            result_json_bytes=len(json.dumps(response, default=str).encode("utf-8")),
+            transcript_chars=len(text),
+        )
+        return response
     except subprocess.TimeoutExpired as exc:
         _emit(
             "job_timeout",
@@ -382,6 +501,24 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
             "timeout_seconds": exc.timeout,
             "stdout": (exc.output or "")[-4000:],
             "stderr": (exc.stderr or "")[-4000:],
+            "timings": timings,
+        }
+    except WhisperStallTimeout as exc:
+        _emit(
+            "whisper_stalled",
+            job_id=job_id,
+            stall_timeout_s=STALL_TIMEOUT_SECONDS,
+            elapsed_s=round(exc.elapsed_s, 3),
+            stdout_tail=exc.stdout[-4000:],
+            stderr_tail=exc.stderr[-4000:],
+            **_resource_snapshot(),
+        )
+        return {
+            "error": "whisper.cpp transcription appeared stalled",
+            "stall_timeout_seconds": STALL_TIMEOUT_SECONDS,
+            "elapsed_seconds": round(exc.elapsed_s, 3),
+            "stdout": exc.stdout[-4000:],
+            "stderr": exc.stderr[-4000:],
             "timings": timings,
         }
     except Exception as exc:
