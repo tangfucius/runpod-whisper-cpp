@@ -235,6 +235,8 @@ def _run(command: list[str], timeout: int, job: Dict[str, Any]) -> subprocess.Co
             stderr=stderr_file,
             text=True,
         )
+        last_stdout_pos = 0
+        last_progress = start
         while process.poll() is None:
             elapsed = time.monotonic() - start
             if elapsed >= timeout:
@@ -263,12 +265,19 @@ def _run(command: list[str], timeout: int, job: Dict[str, Any]) -> subprocess.Co
                     **_resource_snapshot(),
                 )
 
-                if STALL_TIMEOUT_SECONDS > 0 and heartbeat_elapsed >= STALL_TIMEOUT_SECONDS:
+                stdout_file.seek(0, os.SEEK_END)
+                stdout_pos = stdout_file.tell()
+                if stdout_pos > last_stdout_pos:
+                    last_stdout_pos = stdout_pos
+                    last_progress = time.monotonic()
+
+                stalled_seconds = time.monotonic() - last_progress
+                if STALL_TIMEOUT_SECONDS > 0 and stalled_seconds >= STALL_TIMEOUT_SECONDS:
                     _kill_process(process)
                     stdout_file.seek(0)
                     stderr_file.seek(0)
                     raise WhisperStallTimeout(
-                        heartbeat_elapsed,
+                        stalled_seconds,
                         stdout_file.read(),
                         stderr_file.read(),
                     )
